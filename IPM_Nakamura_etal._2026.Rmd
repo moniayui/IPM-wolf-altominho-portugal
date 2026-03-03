@@ -1,0 +1,312 @@
+---
+title: "Assessing key demographic parameters and viability of a wolf population in a highly human-dominated landscape"
+author: "Mónia Nakamura, Pedro Monterroso, Helena Rio-Maior, Raquel Godinho, Francisco Álvares, José Vicente López-Bao, Olivier Gimenez"
+year: "2026"
+subtitle: "R code - Integrated population model for wolf in Alto Minho, Portugal, between 2007 and 2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(echo = TRUE, eval = FALSE, message = FALSE, warning = FALSE, dpi = 300)
+```
+---
+
+# Load required packages
+``` {r load packages}
+# library(IPMbook)
+library(R2jags)
+```
+
+# Load data
+```{r load data}
+##############################################################
+# load('here/data_IPM_wolf_AM_PT.RData')
+
+load("D:/PhD/TASK_4_IntegratedPopulationModel/Data_IPM/RData_files/data_IPM_wolf_AM_PT.RData")
+
+```
+
+## Integrated Population Model 
+
+```{r IPM - CONTROL}
+
+# Specify model in BUGS language
+# Specify model in BUGS language
+cat(file = "model_IPM_FINAL_PVA_Control.jags", "
+model {
+
+# Priors and linear models
+  # Proportion of female breeders
+    mean.Prop_fb ~ dbeta(4, 23)
+    mu.Prop_fb <- logit(mean.Prop_fb)
+    sigma.Prop_fb ~ dunif(0, 5)
+    sqrt.tau.Prop_fb <- 1/sigma.Prop_fb
+    sigma.Prop_fb2 <- pow(sigma.Prop_fb, 2)          
+
+  # Fecundity (litter size)
+    mean.F ~ dlnorm(log(3.9), .2)  
+    mu.F <- log(mean.F)    
+    sigma.F ~ dunif(0, 5)       
+    sqrt.tau.F <- 1/sigma.F      
+    sigma.F2 <- pow(sigma.F, 2)
+
+  # Observation
+    sigma.obs ~ dunif(0.5, 100)
+    tau.obs <- pow(sigma.obs, -2)
+
+  # Population Count
+    Nprior[1,1] ~ dnorm(10, 1)
+    Nprior[2,1] ~ dnorm(15, 1)
+  
+  # Pup survival
+    mean.Spup ~ dunif(0.28, 0.72)
+
+  # Capture-Recapture
+# -------------------------------------------------
+# Parameters:
+# Sad: true survival probability
+# Fd: fidelity probability
+# rr: recovery probability
+# pp: recapture/resighting probability
+# -------------------------------------------------
+# States (S):
+# 1 alive in study area
+# 2 alive outside study area
+# 3 recently dead and recovered
+# 4 recently dead, but not recovered, or dead (absorbing)
+# Observations (O):
+# 1 seen alive
+# 2 recovered dead
+# 3 neither seen nor recovered
+# -------------------------------------------------
+    Sad ~ dunif(0, 1)
+    mu.Sad <- logit(Sad)
+    sigma.Sad ~ dunif(0, 5)
+    sqrt.tau.Sad <- 1/sigma.Sad
+    sigma.Sad2 <- pow(sigma.Sad, 2)
+    
+    Fd ~ dunif(0, 1)
+    rr ~ dunif(0, 1)
+    pp ~ dunif(0, 1)
+# Constraints Capture-recapture, Proportion Breeders and Fecundity
+ for (t in 1:(n.occasions+K)){
+    epsilon.Prop_fb[t] ~ dnorm(0, 1)
+    epsilon.F[t] ~ dnorm (0, 1)
+                          
+    # calculate annual estimates of proportion breeders and fecundity
+    logit(Prop_fb[t]) <- mu.Prop_fb + sqrt.tau.Prop_fb * epsilon.Prop_fb[t]
+    log(F[t]) <- mu.F +  sqrt.tau.F * epsilon.F[t]
+}
+
+ for (t in 1:(n.occasions-1+K)){
+    epsilon.Sad[t] ~ dnorm(0, 1)  
+    
+    # calculate annual estimates of survival, fidelity, recovery and recapture
+    logit(Sad.est[t]) <- mu.Sad + sqrt.tau.Sad * epsilon.Sad[t]
+
+    # Define state-transition and observation matrices 	
+    # Define probabilities of state S(t+1) given S(t)
+      ps[1,1,t] <- Sad.est[t] * Fd
+      ps[1,2,t] <- Sad.est[t] * (1 - Fd)
+      ps[1,3,t] <- 1 - Sad.est[t]
+      ps[1,4,t] <- 0
+      ps[2,1,t] <- 0
+      ps[2,2,t] <- Sad.est[t]
+      ps[2,3,t] <- 1 - Sad.est[t]
+      ps[2,4,t] <- 0
+      ps[3,1,t] <- 0
+      ps[3,2,t] <- 0
+      ps[3,3,t] <- 0
+      ps[3,4,t] <- 1
+      ps[4,1,t] <- 0
+      ps[4,2,t] <- 0
+      ps[4,3,t] <- 0
+      ps[4,4,t] <- 1
+  } #t
+ 
+    # Define probabilities of O(t) given S(t)
+      po[1,1] <- pp
+      po[1,2] <- 0
+      po[1,3] <- 1 - pp
+      po[2,1] <- 0
+      po[2,2] <- 0
+      po[2,3] <- 1
+      po[3,1] <- 0
+      po[3,2] <- rr
+      po[3,3] <- 1 - rr
+      po[4,1] <- 0
+      po[4,2] <- 0
+      po[4,3] <- 1
+
+# Capture-Recapture data
+    # Likelihood 
+      for (i in 1:nind){
+         # Define latent state at first capture
+         z[i,first[i]] <- y[i,first[i]]
+         for (t in (first[i]+1):n.occasions){
+         
+            # State process: draw S(t) given S(t-1)
+            z[i,t] ~ dcat(ps[z[i,t-1], 1:4, t-1])
+            
+            # Observation process: draw O(t) given S(t)
+            y[i,t] ~ dcat(po[z[i,t], 1:3])
+
+            } #t
+         } #i
+      
+# Population count data (state-space model)
+# Model for the initial stage-specific population sizes
+    N[1,1] <- round(Nprior[1,1])
+    N[2,1] <- round(Nprior[2,1])
+
+  # Loop over time
+  for (t in 1:(n.occasions-1+K)){
+
+    # For Spup and Sad.est
+        # Population projection
+    N1p[t+1] ~ dbinom(mean.Spup, N[1,t])   # number of pups born in year t that survive and become an adult in t+1
+
+    N2a[t+1] ~ dbinom(Sad.est[t], N[2,t])   # number of adults that survive from t to t+1 
+
+    N[2,t+1] <- sum(N1p[t+1], N2a[t+1])    # number of adults
+
+    N[1,t+1] ~ dpois(N[2,t+1] * Prop_fb[t+1] * F[t+1]) # number of pups
+
+  }
+
+# Productivity data: Nº females (proportion of female breeders within adults) 
+for (t in 1:(n.occasions-1)){  	
+y_female[t] ~ dbinom(Prop_fb[t], round(0.6*C[t]))
+  }
+
+# Observation model
+# Population count data
+for (t in 1:n.occasions){
+    C[t] ~ dnorm(N[1,t] + N[2,t], tau.obs)
+}
+
+# Derived parameters
+  # Annual population growth rate
+  for (t in 1:(n.occasions-1+K)){
+  ann.growth.rate[t] <- (N[1,t+1] + N[2,t+1]) / (N[1,t] + N[2,t] + 0.001)
+  }
+
+  # Total population size
+  for (t in 1:(n.occasions+K)){
+    Ntot[t] <- N[1,t] + N[2,t]
+  }
+    
+  # Check whether the population is extinct in the future 
+    for (t in 1:K) {
+  extinct[t] <- equals(Ntot[n.occasions+t], 0) # Determines whether population is still thriving (extinct = 0) or went extinct (extinct = 1)
+    }
+}
+", fill = TRUE)
+
+
+
+# Bundle data
+K <- 10   # Number of years with predictions
+
+jags.data <- list(
+  C = as.vector(C),
+  y_female = as.vector(y_female),
+  y = rCH,
+  first = fir_final,
+  nind = nrow(rCH),
+  n.occasions = ncol(rCH),
+  K=K
+)
+str(jags.data)
+
+
+# Initial values
+ld.init <- function(ch, F, Sad=0.6, Fd=0.9){
+  ch[ch==3] <- NA
+  # Initial values for individuals that were recovered
+  v2 <- which(ch==2, arr.ind = TRUE)
+  ch[v2] <- 3
+  for (i in 1:nrow(v2)){
+    ifelse(v2[i,2]!=ncol(ch), ch[v2[i,1], (v2[i,2]+1):ncol(ch)] <- 4, next)}
+  for (i in 1:nrow(ch)){
+    m <- max(which(ch[i,]==1))
+    ch[i,F[i]:m] <- 1
+  }
+  for (i in 1:nrow(v2)){
+    u1 <- min(which(ch[v2[i,1],]==1))
+    ch[v2[i],u1:(v2[i,2]-1)] <- 1
+  }
+  # Initial values for individuals that were not recovered
+  u <- which(is.na(ch[,ncol(ch)]))
+  mat <- matrix(c(Sad*Fd, Sad*(1-Fd), 1-Sad, 0,
+                  0, Sad, 1-Sad, 0,
+                  0, 0, 0, 1,
+                  0, 0, 0, 1), ncol=4, byrow=TRUE)
+  
+  for (h in 1:length(u)){
+    q <- min(which(is.na(ch[u[h],F[u[h]]:ncol(ch)])))-1
+    g <- ncol(ch)-q
+    for (t in F[u[h]]:g){
+      ch[u[h],q+t] <- which(rmultinom(1, 1, mat[ch[u[h],q+t-1],])==1)
+    }
+  }
+  
+  # put an NA at all first releases
+  for (i in 1:nrow(ch)){
+    ch[i,F[i]] <- NA
+  }
+  return(ch)
+}
+
+# Parameters monitored
+parameters <- c("Sad", "Fd", "rr", "pp",
+                "Sad.est", "sigma.Sad",
+                "mean.F", "F", "sigma.F",
+                "Prop_fb", "mean.Prop_fb", "sigma.Prop_fb",
+                "mean.Spup",             
+                "ann.growth.rate",
+                "N", "Ntot",
+                "extinct")
+
+
+# MCMC settings 
+ni <- 200000
+nt <- 1
+nb <- 10000
+nc <- 2   
+na <- 3000
+
+library(R2jags)
+  set.seed(21)
+  zinit <- ld.init(rCH, fir_final)
+  inits <- function(){list(
+                           mean.Spup = runif(1, 0.5, 0.6),
+                           mean.Prop_fb = runif(1, 0, 0.3),  
+                           mean.F = runif(1, 0, 9),  
+                           Sad = runif(1, 0, 1), 
+                           Fd = runif(1, 0, 1), 
+                           pp = runif(1, 0, 1),
+                           rr = runif(1, 0, 1), 
+                           sigma.Prop_fb = runif(1, 0, 5),
+                           sigma.F = runif(1, 0, 5),   
+                           sigma.Sad = runif(1, 0, 5),
+                           z = zinit)}  
+  
+  
+  IPM_PVA_Control <- jags(data = jags.data, 
+                           inits = inits, 
+                           parameters.to.save = parameters, 
+                           model.file = "model_IPM_FINAL_PVA_Control.jags", 
+                           n.chains = nc, 
+                           n.thin = nt, 
+                           n.iter = ni, 
+                           n.burnin = nb)
+```
+# Show the results
+
+```{r IPM - show results}
+print(IPM_PVA_Control, 3)
+traceplot(IPM_PVA_Control)
+```
