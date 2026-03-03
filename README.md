@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/696406417.svg)](https://doi.org/10.5281/zenodo.8377580)
+
 # IPM-wolf-altominho-portugal
 Data and R Code for the manuscript entitled Assessing key demographic parameters and viability of a wolf population in a highly human-dominated landscape, published in 'Biological Conservation' (Nakamura et al. 2026)
 
